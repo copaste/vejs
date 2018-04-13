@@ -46,18 +46,16 @@
 <script type="text/javascript">
 
     var todos = [];
-    for (var i =1; i<=5; i++) {
+    for (var i =1; i <= 5; i++) {
         todos.push({id:i, name:'Todo '+i, completed: false});
     }
 
     Ve.component('app', {
         data: {
             newTodo: { name: '', completed: false },
-            todos: todos || [
-                { id: 1, name: 'Todo 1', completed: true }
-            ],
+            todos: todos,
             temp: [],
-            id: todoList.length
+            id: todos.length
         },
         methods: {
             todoVisibilityFilter: function (filter) {
