@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=0, minimum-scale=1.0, maximum-scale=1.0">
+
+    <title>Ve Framework</title>
+    <link rel="stylesheet" type="text/css" href="todo.css">
+    <script type="text/javascript" src="ve.js"></script>
+</head>
+<body>
+
+<app>
+    <div>
+        <div class="header">
+            <h2>My To Do List</h2>
+            <div class="add-todo">
+                <input type="text" ve:model="newTodo.name" placeholder="Title...">
+                <button type="button" ve:click="add($event)" class="addBtn">Add</button>
+            </div>
+        </div>
+        <ul id="todoListActions">
+            <li class="sort">
+                Sort:
+                <a href="#" ve:click="sort('ASC')">A-Z</a>
+                <a href="#" ve:click="sort('DESC')">Z-A</a>
+            </li>
+            <li class="filters">
+                Filters:
+                <a href="#" ve:click="todoVisibilityFilter('all')">All</a>
+                <a href="#" ve:click="todoVisibilityFilter('completed')">Completed</a>
+                <a href="#" ve:click="todoVisibilityFilter('active')">Active</a>
+            </li>
+        </ul>
+        <hr>
+        <ul id="todoList">
+            <li ve:for="todo in todos track by id" ve:class="{'checked': todo.completed}">
+                <div ve:click="toggleStatus(todo)">#{{todo.id}} {{todo.name}}</div>
+                <span ve:click="editTodo(todo)" class="close edit">Edit</span>
+                <span ve:click="removeTodo(todo)" class="close">×</span>
+            </li>
+        </ul>
+    </div>
+</app>
+
+<script type="text/javascript">
+
+    var todos = [];
+    for (var i =1; i<=5; i++) {
+        todos.push({id:i, name:'Todo '+i, completed: false});
+    }
+
+    Ve.component('app', {
+        data: {
+            newTodo: { name: '', completed: false },
+            todos: todos || [
+                { id: 1, name: 'Todo 1', completed: true }
+            ],
+            temp: [],
+            id: todoList.length
+        },
+        methods: {
+            todoVisibilityFilter: function (filter) {
+                if (!this.temp.length) {
+                    this.temp = this.todos.slice();
+                }
+
+                switch (filter) {
+                    case 'completed':
+                        this.todos = this.temp.filter(function (x) {
+                            return x.completed;
+                        });
+                    break;
+                    case 'active':
+                        this.todos = this.temp.filter(function (x) {
+                            return !x.completed;
+                        });
+                    break;
+                    default:
+                        this.todos = this.temp;
+                        this.temp = [];
+                }
+            },
+            sort: function (order) {
+                var sortOrder = order === 'ASC' ? 1 : -1;
+
+                this.todos.sort(function(a, b) {
+                    if (a.id > b.id) {
+                        return sortOrder;
+                    }
+                    if (b.id > a.id) {
+                        return sortOrder * (-1);
+                    }
+                    return 0;
+                });
+            },
+            add: function (ev) {
+                if (ev && ev.keyCode && ev.keyCode !== 13) {
+                    return;
+                }
+                this.id++;
+                this.newTodo.id = this.id;
+                this.todos.push(this.newTodo);
+                this.newTodo = { name: '', completed: false };
+            },
+            editTodo: function(todo) {
+                var name = prompt("Please enter todo name", todo.name) || todo.name;
+                this.todos.map(function(t) {
+                    if (t.id === todo.id) {
+                        t.name = name;
+                    }
+                    return t;
+                });
+            },
+            removeTodo: function (todo) {
+               this.todos = this.todos.slice(0, this.todos.indexOf(todo)).concat(this.todos.slice(this.todos.indexOf(todo) + 1));
+            },
+            toggleStatus: function (todo) {
+                this.todos.map(function(t) {
+                    if (t.id === todo.id) {
+                        t.completed = !t.completed;
+                    }
+                    return t;
+                });
+            }
+        },
+        template: document.getElementsByTagName('app')[0].innerHTML
+    });
+
+    var app = new Ve();
+    app.bootstrap(document.getElementsByTagName('app')[0]);
+    app.init();
+</script>
+</body>
+</html>
