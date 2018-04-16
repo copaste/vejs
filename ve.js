@@ -429,7 +429,7 @@
     function createFunction (expression) {
         var fn = cacheExpressions.get(expression),
             lexerTokens,
-            fnBody = 'with(this){',
+            fnBody = '',
             fnVars,
             fnVarsArr = [];
 
@@ -442,7 +442,12 @@
         lexerTokens = lex.lex(expression);
 
         for (var i = 0; i < lexerTokens.length; i++) {
-            if (lexerTokens[i].identifier && (lexerTokens[i-1] && lexerTokens[i-1].text !== '.') && (lexerTokens[i+1] && lexerTokens[i+1].text !== ':') ) {
+            if (
+                lexerTokens[i].identifier === true
+                && (lexerTokens[i-1] && lexerTokens[i-1].text !== '.' || !lexerTokens[i-1])
+                && (lexerTokens[i+1] && lexerTokens[i+1].text !== ':' || !lexerTokens[i+1])
+                && (lexerTokens[i+1] && lexerTokens[i+1].text !== '(' || !lexerTokens[i+1])
+            ) {
                 fnVarsArr.push('v' + fnVarsArr.length);
                 fnBody += 'if("' + lexerTokens[i].text + '" in l){v'+[fnVarsArr.length-1] + '=l.' + lexerTokens[i].text + ';}else{v'+[fnVarsArr.length-1] + '=' + lexerTokens[i].text + ';}';
                 expression = expression.replace(lexerTokens[i].text, fnVarsArr[fnVarsArr.length-1]);
@@ -451,8 +456,9 @@
 
         try {
             fnVars = fnVarsArr.length ? 'var ' + fnVarsArr.join(',') + ';' : '';
-            fn = new Function('l', fnVars + fnBody + 'return ' + expression + ';}');
+            fn = new Function('l', 'with(this){'  + fnVars + fnBody + 'return ' + expression + ';}');
         } catch (ex) {
+            console.log(ex);
             fn = function () {}
         }
 
@@ -494,6 +500,18 @@
             this._el.parentNode.removeChild(this._el);
         }
     };
+
+    var ATTR_BIND_REGEXP = /\[attr.(.*)\]/;
+    var PROP_BIND_REGEXP = /\[prop.(.*)\]/;
+
+    function attributeBind (element, name, expression) {
+        var fn = invokeExpression(expression);
+        element.removeAttribute('[attr.' + name + ']');
+
+        return function (localContext) {
+            element.setAttribute(name, fn(this, localContext))
+        }
+    }
 
     var PREFIX_REGEXP = /^((?:x|data)[:\-_])/i;
     var SPECIAL_CHARS_REGEXP = /[\-_]+(.)/g;
@@ -597,7 +615,7 @@
 
                         cb = function (event) {
                             localContext['$event'] = event;
-                            fn (self, localContext);
+                            fn(self, localContext);
                             instance.updateComponentTree();
                         };
 
@@ -1078,6 +1096,13 @@
 
                         nodes[i].directives[j].state = 1;
                     }
+
+                    for (var g in nodes[i].bindings) {
+                        nodes[i].bindings[g].call(
+                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
+                            nodes[i].localContext || {}
+                        );
+                    }
                 }
             }
 
@@ -1104,6 +1129,13 @@
 
                         nodes[i].directives[j].state = 1;
                     }
+
+                    for (var g in nodes[i].bindings) {
+                        nodes[i].bindings[g].call(
+                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
+                            nodes[i].localContext || {}
+                        );
+                    }
                 }
             }
 
@@ -1122,7 +1154,7 @@
                     var textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (match, x, offset, string) {
                         var exp = x.replace(/\s/g, '').split('|');
                         var path = trim(exp[0]).split('.');
-                        var filter = (exp[1] && Ve.options.filters[trim(exp[1]) || '']) || identifier;
+                        var filter = (exp[1] && invokeFilter(trim(exp[1]))) || identifier;
                         var val;
 
                         for (var n in path) {
@@ -1212,15 +1244,27 @@
                     // TODO: bootstrap view then bootstrap content !???
                     //	this.bootstrap(viewContent, contentProjectionElement);
                 }
+
+                for (var j = 0; j < view.attrs.length; j++) {
+                    var attr = view.attrs[j];
+                    if (attr.name.match(PROP_BIND_REGEXP)) {
+                        element.removeAttribute('[prop.' + attr.name.match(PROP_BIND_REGEXP)[1] + ']');
+
+                        view.bindings.push((function(name, value) {
+                            var fn = invokeExpression(value);
+                            return function () {
+                                view.context[name] = fn(this);
+                            }
+                        })(attr.name.match(PROP_BIND_REGEXP)[1], attr.value));
+
+                        view.bindings[view.bindings.length-1].call(view.parent.context);
+                    }
+                }
             }
 
             if (element.nodeType === 1 || element.nodeType === 9) {
                 for (var j = 0; j < view.attrs.length; j++) {
                     var attr = view.attrs[j];
-
-                    if(attr.name.match(/\[(.*?)\]/)) {
-
-                    }
 
                     if (Ve.options.directives[directiveNormalize(attr.name)]) {
                         if (!view.viewContainer || isTemplateDirective([attr])) {
@@ -1236,6 +1280,16 @@
                         else {
                             element.setAttribute(attr.name, attr.value);
                         }
+                    }
+                }
+
+                for (var j = 0; j < view.attrs.length; j++) {
+                    var attr = view.attrs[j];
+
+                    if (attr.name.match(ATTR_BIND_REGEXP) && !view.viewContainer) {
+                        view.bindings.push(
+                            attributeBind(element, attr.name.match(ATTR_BIND_REGEXP)[1], attr.value)
+                        );
                     }
                 }
 
