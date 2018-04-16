@@ -32,6 +32,12 @@
         return isString(value) ? value.replace(/^\s*/, '').replace(/\s*$/, '') : value;
     }
 
+    function noop () {}
+
+    function identifier (v) {
+        return v;
+    }
+
     var isArray = Array.isArray;
 
     /**
@@ -115,6 +121,39 @@
         }
         return obj;
     }
+
+    var DetectChanges = (function () {
+        function DetectChanges (val) {
+            this.prevValue = val;
+        }
+
+        DetectChanges.prototype.diff = function (val) {
+            var isDiff = this.prevValue !== val;
+
+            this.prevValue = val;
+
+            return isDiff;
+        };
+
+        return DetectChanges;
+    }());
+
+    var Cache = (function () {
+        var cache  = Object.create(null);
+
+        function Cache () {
+        }
+
+        Cache.prototype.get = function (name) {
+            return cache[name];
+        };
+
+        Cache.prototype.set = function (name, value) {
+            cache[name] = value;
+        };
+
+        return Cache;
+    }());
 
     /**
      * Creates a new object without a prototype. This object is useful for lookup without having to
@@ -386,12 +425,21 @@
         return Array.prototype.some.call(attributes || [], function(e) { return isTemplateDirNames(e.name) });
     }
 
+    var cacheExpressions = new Cache();
     function createFunction (expression) {
-        var fn,
-            lexerTokens  = lex.lex(expression),
+        var fn = cacheExpressions.get(expression),
+            lexerTokens,
             fnBody = 'with(this){',
             fnVars,
             fnVarsArr = [];
+
+        if (fn) {
+            return function (context, localContext) {
+                return fn.call(context, localContext || {});
+            }
+        }
+
+        lexerTokens = lex.lex(expression);
 
         for (var i = 0; i < lexerTokens.length; i++) {
             if (lexerTokens[i].identifier && (lexerTokens[i-1] && lexerTokens[i-1].text !== '.') && (lexerTokens[i+1] && lexerTokens[i+1].text !== ':') ) {
@@ -408,6 +456,8 @@
             fn = function () {}
         }
 
+        cacheExpressions.set(expression, fn);
+
         return function (context, localContext) {
             return fn.call(context, localContext || {});
         }
@@ -423,42 +473,9 @@
 
     function invokeFilter (name) {
         var filter = Ve.options.filters[name];
-        return filter ? filter() : function (v) { return v; }
+        return filter ? filter() : identifier
     }
 
-    var DetectChanges = (function () {
-        function DetectChanges (val) {
-            this.prevValue = val;
-        }
-
-        DetectChanges.prototype.diff = function (val) {
-            var isDiff = this.prevValue !== val;
-
-            this.prevValue = val;
-
-            return isDiff;
-        };
-
-        return DetectChanges;
-    }());
-
-
-    var Cache = (function () {
-        var cache  = Object.create(null);
-
-        function Cache () {
-        }
-
-        Cache.prototype.get = function (name) {
-            return cache.name;
-        };
-
-        Cache.prototype.set = function (name, value) {
-            cache.name = value;
-        };
-
-        return Cache;
-    }());
 
     function ViewContainer (el, view) {
         this._view = view;
@@ -1095,15 +1112,17 @@
 
         interpolations: function (textElement, view) {
             var clone = textElement.cloneNode(true);
+            var interpolationTokens = textElement.textContent.match(/\{\{(.*?)\}\}/g);
 
-            if (textElement.textContent.match(/\{\{(.*?)\}\}/g)) {
+            if (interpolationTokens) {
+
                 function interpolate (locals) {
                     var self = this;
 
-                    textElement.textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (x) {
-                        var exp = x.replace(/{/g, '').replace(/}/g, '').replace(/\s/g, '').split('|');
-                        var path = trim(exp[0]).replace(/{/g, '').replace(/}/g, '').replace(/\s/g, '').split('.');
-                        var filter = ( (exp[1] && Ve.options.filters[trim(exp[1]) || '']) || function(){return false;})();
+                    var textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (match, x, offset, string) {
+                        var exp = x.replace(/\s/g, '').split('|');
+                        var path = trim(exp[0]).split('.');
+                        var filter = (exp[1] && Ve.options.filters[trim(exp[1]) || '']) || identifier;
                         var val;
 
                         for (var n in path) {
@@ -1119,6 +1138,10 @@
 
                         return isUndef(val) ? '' : (filter ? filter(val) : val);
                     });
+
+                    if (textElement.textContent !== textContent) {
+                        textElement.textContent = textContent;
+                    }
                 }
 
                 view.directives.push({
@@ -1194,6 +1217,10 @@
             if (element.nodeType === 1 || element.nodeType === 9) {
                 for (var j = 0; j < view.attrs.length; j++) {
                     var attr = view.attrs[j];
+
+                    if(attr.name.match(/\[(.*?)\]/)) {
+
+                    }
 
                     if (Ve.options.directives[directiveNormalize(attr.name)]) {
                         if (!view.viewContainer || isTemplateDirective([attr])) {
