@@ -1247,17 +1247,19 @@
 
                 for (var j = 0; j < view.attrs.length; j++) {
                     var attr = view.attrs[j];
-                    if (attr.name.match(PROP_BIND_REGEXP)) {
-                        element.removeAttribute('[prop.' + attr.name.match(PROP_BIND_REGEXP)[1] + ']');
+                    if (attr.name.match(PROP_BIND_REGEXP) && !view.viewContainer) {
+                        var attrName = attr.name.match(PROP_BIND_REGEXP)[1];
+                        element.removeAttribute('[prop.' + attrName + ']');
 
-                        view.bindings.push((function(name, value) {
+                        view.bindings.push((function(propName, value) {
                             var fn = invokeExpression(value);
-                            return function () {
-                                view.context[name] = fn(this);
-                            }
-                        })(attr.name.match(PROP_BIND_REGEXP)[1], attr.value));
 
-                        view.bindings[view.bindings.length-1].call(view.parent.context);
+                            return function (localContext) {
+                                view.context[propName] = fn(this, localContext);
+                            }
+                        })(attrName, attr.value));
+
+                        view.bindings[view.bindings.length-1].call(view.parent.context, localContext);
                     }
                 }
             }
