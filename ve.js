@@ -449,16 +449,25 @@
                 && (lexerTokens[i+1] && lexerTokens[i+1].text !== '(' || !lexerTokens[i+1])
             ) {
                 fnVarsArr.push('v' + fnVarsArr.length);
-                fnBody += 'if("' + lexerTokens[i].text + '" in l){v'+[fnVarsArr.length-1] + '=l.' + lexerTokens[i].text + ';}else{v'+[fnVarsArr.length-1] + '=' + lexerTokens[i].text + ';}';
-                expression = expression.replace(lexerTokens[i].text, fnVarsArr[fnVarsArr.length-1]);
+                fnBody += 'if("' + lexerTokens[i].text + '" in l){v'+[fnVarsArr.length-1] + '=l.' + lexerTokens[i].text +
+                    ';}else if("' + lexerTokens[i].text + '" in this){v'+[fnVarsArr.length - 1] + '=' + lexerTokens[i].text +
+                    ';}else{v'+[fnVarsArr.length - 1] + '=undefined;}';
+                //expression = expression.replace(new RegExp(lexerTokens[i].text + '\\b'), fnVarsArr[fnVarsArr.length-1]);
+                lexerTokens[i].text = fnVarsArr[fnVarsArr.length - 1];
             }
+        }
+
+        fnBody += ' return ';
+        for (var i = 0; i < lexerTokens.length; i++) {
+            fnBody += lexerTokens[i].text;
         }
 
         try {
             fnVars = fnVarsArr.length ? 'var ' + fnVarsArr.join(',') + ';' : '';
-            fn = new Function('l', 'with(this){'  + fnVars + fnBody + 'return ' + expression + ';}');
+            fn = new Function('l', 'with(this){'  + fnVars + fnBody + ';}');// + 'return ' + expression + ';}');
+            console.info('with(this){'  + fnVars + fnBody + ';}');
         } catch (ex) {
-            console.log(ex);
+            console.warn(ex, 'with(this){'  + fnVars + fnBody + ';}');
             fn = function () {}
         }
 
@@ -536,7 +545,7 @@
 
                 originEventListener.call(this, a, function (event) {
                     b(event);
-                    self.updateComponentTree();
+                    self.nextTick();
                 }, c);
             }*/
     }
@@ -616,7 +625,7 @@
                         cb = function (event) {
                             localContext['$event'] = event;
                             fn(self, localContext);
-                            instance.updateComponentTree();
+                            instance.nextTick();
                         };
 
                         element.addEventListener(eventName, cb);
@@ -776,13 +785,12 @@
         var listenerCb = function (expression, event) {
             var key = event.keyCode;
 
-            // TODO: check this
             invokeExpression(expression + ' = "' + elementValue(event.target) + '"')(this);
 
             //ignore command, modifiers, arrows
             if (key === 91 || (15 < key && key < 19) || (37 <= key && key <= 40)) return;
 
-            instance.updateComponentTree();
+            instance.nextTick();
         };
 
         return {
@@ -974,7 +982,6 @@
 
                 var lhs = match[1];
                 var rhs = match[2];
-                //var aliasAs = match[3];
                 var trackByExp = match[4];
                 var filterSrt = '';
 
@@ -1052,10 +1059,6 @@
         }
     });
 
-    /**
-     *
-     * @type {{bootstrap: Ve.bootstrap, init: Ve.init, updateComponentTree: Ve.updateComponentTree, interpolations: Ve.interpolations, createView: Ve.createView}}
-     */
     Ve.prototype = {
         bootstrap: function (node, parent, localContext) {
             var children,
@@ -1078,7 +1081,7 @@
         },
         init: function (nodes) {
             this.bootstrapped = true;
-            console.log(this)
+
             function map (nodes) {
                 for (var i = 0; i < nodes.length; i++) {
 
@@ -1110,7 +1113,7 @@
             this.init = true;
         },
 
-        updateComponentTree: function (nodes) {
+        nextTick: function (nodes) {
             function map (nodes) {
                 for (var i = 0; i < nodes.length; i++) {
                     if (nodes[i].view.children.length) {
@@ -1255,6 +1258,7 @@
                             var fn = invokeExpression(value);
 
                             return function (localContext) {
+                                // TODO: Compare new and old value
                                 view.context[propName] = fn(this, localContext);
                             }
                         })(attrName, attr.value));
