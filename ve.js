@@ -1,4 +1,13 @@
 (function (window, document) {
+    /**
+     * TODO:
+     *  - chained filters
+     *  - improve interpolation
+     *  - content init
+     *  - view init
+     *  - hooks
+     *  -
+     */
 
     var msie,
         slice = [].slice,
@@ -424,7 +433,7 @@
     function isTemplateDirective (attributes) {
         return Array.prototype.some.call(attributes || [], function(e) { return isTemplateDirNames(e.name) });
     }
-
+window.lex = lex;
     var cacheExpressions = new Cache();
     function createFunction (expression) {
         var fn = cacheExpressions.get(expression),
@@ -465,7 +474,6 @@
         try {
             fnVars = fnVarsArr.length ? 'var ' + fnVarsArr.join(',') + ';' : '';
             fn = new Function('l', 'with(this){'  + fnVars + fnBody + ';}');// + 'return ' + expression + ';}');
-            console.info('with(this){'  + fnVars + fnBody + ';}');
         } catch (ex) {
             console.warn(ex, 'with(this){'  + fnVars + fnBody + ';}');
             fn = function () {}
@@ -602,7 +610,6 @@
             node.directives[j].state = 0;
         }
     }
-
 
     /**
      * Default directives
@@ -1023,6 +1030,7 @@
      *  - slice
      *  - json
      * 	- lowercase
+     * 	- limitTo
      * 	- uppercase
      */
 
@@ -1047,6 +1055,15 @@
     Ve.filter('json', function () {
         return function (value) {
             return JSON.stringify(value);
+        }
+    });
+
+    Ve.filter('limitTo', function () {
+        return function (value, limit) {
+            if (value.length > limit) {
+                return value.substring(0, limit);
+            }
+            return value;
         }
     });
 
@@ -1079,8 +1096,33 @@
 
             return parent;
         },
-        init: function (nodes) {
+
+        initBindings: function (nodes) {
             this.bootstrapped = true;
+
+            function map (nodes) {
+                for (var i = 0; i < nodes.length; i++) {
+
+                    if (nodes[i].view.children.length) {
+                        map(nodes[i].view.children, nodes[i].context);
+                    }
+
+                    for (var g in nodes[i].bindings) {
+                        nodes[i].bindings[g].call(
+                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
+                            nodes[i].localContext || {}
+                        );
+                    }
+                }
+            }
+
+            map(nodes || this.tree);
+            this.init = true;
+        },
+
+        initView: function (nodes) {
+            this.bootstrapped = true;
+            this.initBindings();
 
             function map (nodes) {
                 for (var i = 0; i < nodes.length; i++) {
@@ -1098,13 +1140,6 @@
                         );
 
                         nodes[i].directives[j].state = 1;
-                    }
-
-                    for (var g in nodes[i].bindings) {
-                        nodes[i].bindings[g].call(
-                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                            nodes[i].localContext || {}
-                        );
                     }
                 }
             }
@@ -1250,6 +1285,7 @@
 
                 for (var j = 0; j < view.attrs.length; j++) {
                     var attr = view.attrs[j];
+
                     if (attr.name.match(PROP_BIND_REGEXP) && !view.viewContainer) {
                         var attrName = attr.name.match(PROP_BIND_REGEXP)[1];
                         element.removeAttribute('[prop.' + attrName + ']');
@@ -1262,8 +1298,6 @@
                                 view.context[propName] = fn(this, localContext);
                             }
                         })(attrName, attr.value));
-
-                        view.bindings[view.bindings.length-1].call(view.parent.context, localContext);
                     }
                 }
             }

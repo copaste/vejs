@@ -34,13 +34,16 @@
         </ul>
         <hr>
         <ul id="todoList">
-            <li ve:for="todo in todos track by id" ve:class="{'checked': todo.completed}">
-                <div ve:click="toggleStatus(todo)">#{{todo.id}} {{todo.name}}</div>
+            <li ve:for="todo in todos track by id" ve:class="{checked: todo.completed}" [attr.id]="todo.id">
+                <div ve:click="toggleStatus(todo)">#{{todo.id}} {{todo.name | limitTo:2:2}}</div>
                 <span ve:click="editTodo(todo)" class="close edit">Edit</span>
                 <span ve:click="removeTodo(todo)" class="close">×</span>
             </li>
+            <item-json ve:for="todo in todos track by id" todo="todo"></item-json>
         </ul>
     </div>
+
+    <test [prop.test]="bindedProp"></test>
 </app>
 
 <script type="text/javascript">
@@ -50,12 +53,27 @@
         todos.push({id:i, name:'Todo '+i, completed: false});
     }
 
+    Ve.component('item-json', {
+        data: {
+            todo: null
+        },
+        methods: {},
+        template: '<div>{{ todo | json }}</div>'
+    });
+
+    Ve.component('test', {
+        data: {},
+        methods: {},
+        template: '<div ve:for="p in test">{{ p }}</div>'
+    });
+
     Ve.component('app', {
         data: {
             newTodo: { name: '', completed: false },
             todos: todos,
             temp: [],
-            id: todos.length
+            bindedProp: [1, 2, 3, 4, 5],
+            id: todos.length,
         },
         methods: {
             todoVisibilityFilter: function (filter) {
@@ -98,6 +116,7 @@
                 }
                 this.id++;
                 this.newTodo.id = this.id;
+                this.bindedProp.push(this.id);
                 this.todos.push(this.newTodo);
                 this.newTodo = { name: '', completed: false };
             },
@@ -127,7 +146,7 @@
 
     var app = new Ve();
     app.bootstrap(document.getElementsByTagName('app')[0]);
-    app.init();
+    app.initView();
 </script>
 </body>
 </html>
