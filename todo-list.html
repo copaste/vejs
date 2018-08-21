@@ -34,8 +34,8 @@
         </ul>
         <hr>
         <ul id="todoList">
-            <li ve:for="todo in todos track by id" ve:class="{checked: todo.completed}" [attr.id]="todo.id">
-                <div ve:click="toggleStatus(todo)">#{{todo.id}} {{todo.name | limitTo:2:2}}</div>
+            <li ve:for="todo in todos | slice:2 track by id" ve:class="{checked: todo.completed}" [attr.id]="todo.id">
+                <div ve:click="toggleStatus(todo)">#{{todo.id}} {{ todo.name | limitTo:4 + ' ...' }}</div>
                 <span ve:click="editTodo(todo)" class="close edit">Edit</span>
                 <span ve:click="removeTodo(todo)" class="close">×</span>
             </li>

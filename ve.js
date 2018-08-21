@@ -445,11 +445,10 @@
                 return fn.call(context, localContext || {});
             }
         }
-        console.info(expression);
+
         expression = detectExpressionFilters(expression);
         lexerTokens = lex.lex(expression);
-console.info(expression);
-console.info(lexerTokens);
+
         for (var i = 0; i < lexerTokens.length; i++) {
             if (
                 lexerTokens[i].identifier === true
@@ -495,7 +494,6 @@ console.info(lexerTokens);
     }
 
     function filterWrapper (filterName, args) {
-        console.log(filterName, args)
         return invokeFilter(filterName).apply(null, args)
     }
 
