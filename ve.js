@@ -758,18 +758,18 @@
             /** @type {Function} */ ifStatement;
 
         return {
-            init: function (element, expression) {
+            init: function (element, expression, view) {
                 ifStatement = invokeExpression(expression);
 
                 viewContainer = new ViewContainer(element);
 
-                if (!ifStatement(this)) {
+                if (!ifStatement(this, view.localContext)) {
                     removed = true;
                     viewContainer.remove();
                 }
             },
-            update: function () {
-                var state = ifStatement(this);
+            update: function (element, expression, view) {
+                var state = ifStatement(this, view.localContext);
 
                 if (!state && !removed) {
                     removed = true;
@@ -1181,6 +1181,7 @@
 
             map(nodes || this.tree);
             this.init = true;
+            console.log(this)
         },
 
         nextTick: function (nodes) {
@@ -1255,7 +1256,7 @@
             var view = {
                 component: (parent && parent.cmp) || {},
                 context: parent && (parent.context || parent.cmp || {}),
-                localContext: localContext || {},
+                localContext: localContext,
                 name: (element.tagName || '').toLocaleLowerCase(),
                 element: element,
                 parent: parent,
@@ -1347,6 +1348,7 @@
                     view.element = document.createComment('ve:for');
                     view.name = 'comment';
                     view.type = view.element.nodeType;
+                    console.log(55, view)
                 }
             }
 
