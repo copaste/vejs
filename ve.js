@@ -1,12 +1,10 @@
 (function (window, document) {
     /**
      * TODO:
-     *  - chained filters
-     *  - improve interpolation
+     *  - improve For block and its filters
      *  - content init
      *  - view init
      *  - hooks
-     *  -
      */
 
     var msie,
@@ -433,7 +431,7 @@
     function isTemplateDirective (attributes) {
         return Array.prototype.some.call(attributes || [], function(e) { return isTemplateDirNames(e.name) });
     }
-window.lex = lex;
+
     var cacheExpressions = new Cache();
     function createFunction (expression) {
         var fn = cacheExpressions.get(expression),
@@ -447,9 +445,11 @@ window.lex = lex;
                 return fn.call(context, localContext || {});
             }
         }
-
+        console.info(expression);
+        expression = detectExpressionFilters(expression);
         lexerTokens = lex.lex(expression);
-
+console.info(expression);
+console.info(lexerTokens);
         for (var i = 0; i < lexerTokens.length; i++) {
             if (
                 lexerTokens[i].identifier === true
@@ -473,7 +473,7 @@ window.lex = lex;
 
         try {
             fnVars = fnVarsArr.length ? 'var ' + fnVarsArr.join(',') + ';' : '';
-            fn = new Function('l', 'with(this){'  + fnVars + fnBody + ';}');// + 'return ' + expression + ';}');
+            fn = new Function('l', 'filterWrapper', 'with(this){'  + fnVars + fnBody + ';}');// + 'return ' + expression + ';}');
         } catch (ex) {
             console.warn(ex, 'with(this){'  + fnVars + fnBody + ';}');
             fn = function () {}
@@ -482,7 +482,7 @@ window.lex = lex;
         cacheExpressions.set(expression, fn);
 
         return function (context, localContext) {
-            return fn.call(context, localContext || {});
+            return fn.call(context, localContext || {}, filterWrapper);
         }
     }
 
@@ -494,11 +494,41 @@ window.lex = lex;
         return createFunction(expression, scope);
     }
 
+    function filterWrapper (filterName, args) {
+        console.log(filterName, args)
+        return invokeFilter(filterName).apply(null, args)
+    }
+
+    function detectExpressionFilters (expression) {
+        var filtersRegex = /(?:\|)[\s]?(.+?)(?=\s|$)/g,
+            matchExpAndFilters = /^(.+)(?:\|)[\s]?(.+?)(?=\s|$)/,
+            filter,
+            filtersMatch = filtersRegex.test(expression),
+            filtersExpression = expression;
+
+        if (!filtersMatch) {
+            return expression;
+        }
+
+        filtersRegex.lastIndex = 0;
+        filtersExpression = expression.match(/^(\D+)(?:\|)/)[1].trim();
+
+        while ((filter = filtersRegex.exec(expression)) !== null) {
+            // This is necessary to avoid infinite loops with zero-width matches
+            if (filter.index === filtersRegex.lastIndex) {
+                filtersRegex.lastIndex++;
+            }
+
+            filtersExpression = 'filterWrapper("' + filter[1].split(':')[0] + '",[' + [filtersExpression].concat(filter[1].split(':').slice(1)).join(',') + '])';
+        }
+
+        return expression.replace(expression.match(matchExpAndFilters)[0], filtersExpression);
+    }
+
     function invokeFilter (name) {
         var filter = Ve.options.filters[name];
         return filter ? filter() : identifier
     }
-
 
     function ViewContainer (el, view) {
         this._view = view;
@@ -696,6 +726,13 @@ window.lex = lex;
         return {
             init: updateElementClass,
             update: updateElementClass
+        }
+    });
+
+    Ve.directive('ve:content', function () {
+        return {
+            init: function () {},
+            update: noop
         }
     });
 
@@ -1072,7 +1109,7 @@ window.lex = lex;
             if (!isArray(value)) {
                 return value;
             }
-            return value.slice(begin, end);
+            return value.slice(begin, end || -1);
         }
     });
 
@@ -1186,27 +1223,9 @@ window.lex = lex;
 
             if (interpolationTokens) {
 
-                function interpolate (locals) {
-                    var self = this;
-
+                function interpolate (scope, locals) {
                     var textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (match, x, offset, string) {
-                        var exp = x.replace(/\s/g, '').split('|');
-                        var path = trim(exp[0]).split('.');
-                        var filter = (exp[1] && invokeFilter(trim(exp[1]))) || identifier;
-                        var val;
-
-                        for (var n in path) {
-                            try {
-                                val = (val && val[path[n]]);
-                                val = isUndef(val) ? (self[path[n]] || locals[path[n]]): val;
-                            }
-                            catch (ex) {
-                                val = null;
-                                console.error(clone.textContent)
-                            }
-                        }
-
-                        return isUndef(val) ? '' : (filter ? filter(val) : val);
+                        return invokeExpression(x)(scope, locals);
                     });
 
                     if (textElement.textContent !== textContent) {
@@ -1235,7 +1254,6 @@ window.lex = lex;
             var self = this;
             var component;
             var contentProjectionElement;
-            var viewContent;
             var view = {
                 component: (parent && parent.cmp) || {},
                 context: parent && (parent.context || parent.cmp || {}),
@@ -1274,14 +1292,8 @@ window.lex = lex;
                 view.context = new ComponentContext(component.data);
                 view.template = component.template;
 
-                viewContent = view.element.innerHTML;
+                view.content = view.element.innerHTML;
                 element.innerHTML = component.template;
-
-                contentProjectionElement = element.querySelector('[ve-content]');
-                if (contentProjectionElement) {
-                    // TODO: bootstrap view then bootstrap content !???
-                    //	this.bootstrap(viewContent, contentProjectionElement);
-                }
 
                 for (var j = 0; j < view.attrs.length; j++) {
                     var attr = view.attrs[j];
