@@ -24,6 +24,14 @@ ul li {
     user-select: none;
 }
 
+.fright {
+    float: right;
+}
+
+.fleft {
+    float: left;
+}
+
 /* Set all odd list items to a different color (zebra-stripes) */
 ul li:nth-child(odd) {
     background: #f9f9f9;
@@ -134,4 +142,13 @@ input {
 
 .addBtn:hover {
     background-color: #bbb;
+}
+
+.filters {
+    line-height: 40px;
+    height: 62px;
+}
+
+.filters input {
+    width: 200px;
 }

@@ -45,6 +45,10 @@
         return v;
     }
 
+    function valueFn (v) {
+        return function valRef () { return v };
+    }
+
     var isArray = Array.isArray;
 
     /**
@@ -498,8 +502,8 @@
     }
 
     function detectExpressionFilters (expression) {
-        var filtersRegex = /(?:\|)[\s]?(.+?)(?=\s|$)/g,
-            matchExpAndFilters = /^(.+)(?:\|)[\s]?(.+?)(?=\s|$)/,
+        var filtersRegex = /(?:\|)(?:\s)(.*?)(?=\s|$)/g,
+            matchExpAndFilters = /[^\s]+(\D)(?:\|)[\s]?(.+?)(?=\s|$)/, // /^(.+)(?:\|)[\s]?(.+?)(?=\s|$)/,
             filter,
             filtersMatch = filtersRegex.test(expression),
             filtersExpression = expression;
@@ -509,7 +513,7 @@
         }
 
         filtersRegex.lastIndex = 0;
-        filtersExpression = expression.match(/^(\D+)(?:\|)/)[1].trim();
+        filtersExpression = expression.match(/^(.*?)[\|]/)[1].trim();
 
         while ((filter = filtersRegex.exec(expression)) !== null) {
             // This is necessary to avoid infinite loops with zero-width matches
@@ -524,8 +528,11 @@
     }
 
     function invokeFilter (name) {
-        var filter = Ve.options.filters[name];
-        return filter ? filter() : identifier
+        try {
+            return Ve.options.filters[name]();
+        } catch (ex) {
+            return identifier;
+        }
     }
 
     function ViewContainer (el, view) {
@@ -574,16 +581,58 @@
     }
 
     function Ve (meta) {
+        var self = this;
         this.tree = [];
 
-        /*var originEventListener = HTMLElement.prototype.addEventListener;
-                HTMLElement.prototype.addEventListener = function (a, b, c) {
+        var arrayProto = Array.prototype;
+        var arrayMethods = Object.create(arrayProto);
+        [
+            'push',
+            'pop',
+            'shift',
+            'unshift',
+            'splice',
+            'sort',
+            'reverse'
+        ]
+        .forEach(function (method) {
+            // cache original method
+            var original = arrayProto[method];
 
-                originEventListener.call(this, a, function (event) {
-                    b(event);
-                    self.nextTick();
-                }, c);
-            }*/
+            Object.defineProperty(arrayMethods, method, {
+                value: function mutator () {
+
+                    var args = [], len = arguments.length;
+                    while ( len-- ) args[ len ] = arguments[ len ];
+
+                    var result = original.apply(this, args);
+
+                    switch (method) {
+                        case 'push':
+                        case 'unshift':
+                            inserted = args;
+                            break;
+                        case 'splice':
+                            inserted = args.slice(2);
+                            break
+                    }
+                    console.log('result: ', result);
+                    return result
+                },
+                enumerable: false,
+                writable: true,
+                configurable: true
+            });
+        });
+
+        /*var originEventListener = HTMLElement.prototype.addEventListener;
+        HTMLElement.prototype.addEventListener = function (eventName, callback, options) {
+
+            originEventListener.call(this, eventName, function (event) {
+                callback(event);
+                self.nextTick();
+            }, options);
+        }*/
     }
 
     var ASSET_TYPES = [
@@ -827,7 +876,8 @@
         var listenerCb = function (expression, event) {
             var key = event.keyCode;
 
-            invokeExpression(expression + ' = "' + elementValue(event.target) + '"')(this);
+            var fn = new Function('l',  'with(l || this) {' + expression + ' = "' + elementValue(event.target) + '"; }');
+            fn.call(this);
 
             //ignore command, modifiers, arrows
             if (key === 91 || (15 < key && key < 19) || (37 <= key && key <= 40)) return;
@@ -859,8 +909,7 @@
                 element.addEventListener('change', listenerCb);
             },
             update: function (element, expression) {
-                var value = invokeExpression(expression)(this);
-                elementValue(element, value);
+                elementValue(element, invokeExpression(expression)(this));
             },
             destroy: function (element) {
                 element.removeEventListener('input', listenerCb);
@@ -875,8 +924,6 @@
             originElement,
             elementAnchor,
             exp,
-            filterName,
-            filterArgs,
             filter,
             trackBy,
             alias,
@@ -895,7 +942,11 @@
                 block,
                 index;
 
-            collection = filter.apply(null, [collection].concat(filterArgs));
+            if (!Array.isArray(collection)) {
+                return;
+            }
+
+            collection = filter ? filter(view.context, view.localContext) : collection;
             collectionLength = collection.length;
 
             if (aliasAs) {
@@ -1025,7 +1076,6 @@
                 var lhs = match[1];
                 var rhs = match[2];
                 var trackByExp = match[4];
-                var filterSrt = '';
 
                 match = lhs.match(/^(?:(\s*[$\w]+)|\(\s*([$\w]+)\s*,\s*([$\w]+)\s*\))$/);
 
@@ -1038,12 +1088,9 @@
                 alias = lhs;
                 aliasAs = match[3];
                 collectionName = trim(rhs.split('|')[0]);
-                collection =this[collectionName] || [];
+                collection = this[collectionName] || [];
 
-                filterStr = trim(rhs.split('|')[1] || '');
-                filterName = filterStr && filterStr.split(':')[0];
-                filterArgs = (filterStr && filterStr.split(':').slice(1)) || [];
-                filter = invokeFilter(filterName);
+                filter = rhs.indexOf('|') && invokeExpression(detectExpressionFilters(rhs));
 
                 elementAnchor = document.createComment('ve:for');
                 originElement = element.cloneNode(true);
@@ -1139,13 +1186,13 @@
                 for (var i = 0; i < nodes.length; i++) {
 
                     if (nodes[i].view.children.length) {
-                        map(nodes[i].view.children, nodes[i].context);
+                        map(nodes[i].view.children);
                     }
 
                     for (var g in nodes[i].bindings) {
                         nodes[i].bindings[g].call(
                             nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                            nodes[i].localContext || {}
+                            nodes[i].localContext
                         );
                     }
                 }
@@ -1180,6 +1227,7 @@
             }
 
             map(nodes || this.tree);
+            this.initBindings();
             this.init = true;
             console.log(this)
         },
@@ -1216,7 +1264,7 @@
             map(nodes || this.tree);
         },
 
-        interpolations: function (textElement, view) {
+        interpolations: function (textElement) {
             var clone = textElement.cloneNode(true);
             var interpolationTokens = textElement.textContent.match(/\{\{(.*?)\}\}/g);
 
@@ -1232,18 +1280,19 @@
                     }
                 }
 
-                view.directives.push({
+                return {
                     element: textElement,
                     expression: textElement.textContent,
+                    isComponent: false,
                     fn: {
                         init: function (element, expression, view) {
-                            interpolate.call(this, view.localContext)
+                            interpolate(this, view.localContext)
                         },
                         update: function (element, expression, view) {
-                            interpolate.call(this, view.localContext)
+                            interpolate(this, view.localContext)
                         }
                     }
-                });
+                };
             }
 
             return false;
@@ -1279,8 +1328,26 @@
 
                 var ComponentContext = (function ComponentContext() {
                     function ComponentContext (data) {
-                        Object.assign(this, data);
+
+                        forEach(data, function (val, keyName) {
+                           Object.defineProperty(this, keyName, {
+                               enumerable: false,
+                               configurable: true,
+                               get: function () {
+                                   return typeof this['_' + keyName] === 'undefined' ? val : this['_' + keyName];
+                               },
+                               set: function (val) {
+                                   this['_' + keyName] = val;
+                                   self.nextTick();
+                               }
+                           })
+                        }, this);
+
+                        this.$el = view.element;
+                        this.$attrs = view.attrs;
+                        this.updateView = self.nextTick;
                     }
+
                     return ComponentContext;
                 }());
 
@@ -1316,11 +1383,18 @@
             if (element.nodeType === 1 || element.nodeType === 9) {
                 for (var j = 0; j < view.attrs.length; j++) {
                     var attr = view.attrs[j];
+                    var name = directiveNormalize(attr.name);
 
-                    if (Ve.options.directives[directiveNormalize(attr.name)]) {
+                    if (!Ve.options.directives[name]) {
+                        continue;
+                    }
+
+                    try {
+                        var directive = Ve.options.directives[name];
+
                         if (!view.viewContainer || isTemplateDirective([attr])) {
                             view.directives.push({
-                                fn: Ve.options.directives[directiveNormalize(attr.name)].call(this),
+                                fn: directive.call(this),
                                 element: element,
                                 expression: attr.value,
                                 view: view
@@ -1328,9 +1402,8 @@
 
                             view.element.removeAttribute(attr.name);
                         }
-                        else {
-                            element.setAttribute(attr.name, attr.value);
-                        }
+                    } catch (e) {
+                        console.warn(attr.name, e);
                     }
                 }
 
@@ -1348,7 +1421,6 @@
                     view.element = document.createComment('ve:for');
                     view.name = 'comment';
                     view.type = view.element.nodeType;
-                    console.log(55, view)
                 }
             }
 
