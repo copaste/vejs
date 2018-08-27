@@ -34,13 +34,16 @@
         </ul>
         <hr>
         <ul id="todoList">
-            <li ve:for="todo in todos track by id" ve:class="{'checked': todo.completed}">
-                <div ve:click="toggleStatus(todo)">#{{todo.id}} {{todo.name}}</div>
+            <li ve:for="todo in todos track by id" ve:class="{checked: todo.completed}" [attr.id]="todo.id">
+                <div ve:click="toggleStatus(todo)">#{{todo.id}} {{ todo.name | limitTo:4 + ' ...' }}</div>
                 <span ve:click="editTodo(todo)" class="close edit">Edit</span>
                 <span ve:click="removeTodo(todo)" class="close">×</span>
             </li>
+            <item-json ve:for="todo in todos track by id" todo="todo"></item-json>
         </ul>
     </div>
+
+    <test [prop.array]="bindedProp"></test>
 </app>
 
 <script type="text/javascript">
@@ -50,12 +53,27 @@
         todos.push({id:i, name:'Todo '+i, completed: false});
     }
 
+    Ve.component('item-json', {
+        data: {
+            todo: null
+        },
+        methods: {},
+        template: '<div>{{ todo | json }}</div>'
+    });
+
+    Ve.component('test', {
+        data: {},
+        methods: {},
+        template: '<div ve:for="p in array">{{ p }}</div>'
+    });
+
     Ve.component('app', {
         data: {
             newTodo: { name: '', completed: false },
             todos: todos,
             temp: [],
-            id: todos.length
+            bindedProp: [1, 2, 3, 4, 5],
+            id: todos.length,
         },
         methods: {
             todoVisibilityFilter: function (filter) {
@@ -98,12 +116,13 @@
                 }
                 this.id++;
                 this.newTodo.id = this.id;
-                this.todos.push(this.newTodo);
+                this.bindedProp = this.bindedProp.concat([this.id]);
+                this.todos = this.todos.concat([this.newTodo]);
                 this.newTodo = { name: '', completed: false };
             },
             editTodo: function(todo) {
                 var name = prompt("Please enter todo name", todo.name) || todo.name;
-                this.todos.map(function(t) {
+                this.todos = this.todos.map(function(t) {
                     if (t.id === todo.id) {
                         t.name = name;
                     }
@@ -114,7 +133,7 @@
                this.todos = this.todos.slice(0, this.todos.indexOf(todo)).concat(this.todos.slice(this.todos.indexOf(todo) + 1));
             },
             toggleStatus: function (todo) {
-                this.todos.map(function(t) {
+                this.todos = this.todos.map(function(t) {
                     if (t.id === todo.id) {
                         t.completed = !t.completed;
                     }
@@ -127,7 +146,7 @@
 
     var app = new Ve();
     app.bootstrap(document.getElementsByTagName('app')[0]);
-    app.init();
+    app.initView();
 </script>
 </body>
 </html>

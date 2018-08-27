@@ -1,4 +1,11 @@
 (function (window, document) {
+    /**
+     * TODO:
+     *  - improve For block and its filters
+     *  - content init
+     *  - view init
+     *  - hooks
+     */
 
     var msie,
         slice = [].slice,
@@ -36,6 +43,10 @@
 
     function identifier (v) {
         return v;
+    }
+
+    function valueFn (v) {
+        return function valRef () { return v };
     }
 
     var isArray = Array.isArray;
@@ -439,6 +450,7 @@
             }
         }
 
+        expression = detectExpressionFilters(expression);
         lexerTokens = lex.lex(expression);
 
         for (var i = 0; i < lexerTokens.length; i++) {
@@ -464,8 +476,7 @@
 
         try {
             fnVars = fnVarsArr.length ? 'var ' + fnVarsArr.join(',') + ';' : '';
-            fn = new Function('l', 'with(this){'  + fnVars + fnBody + ';}');// + 'return ' + expression + ';}');
-            console.info('with(this){'  + fnVars + fnBody + ';}');
+            fn = new Function('l', 'filterWrapper', 'with(this){'  + fnVars + fnBody + ';}');// + 'return ' + expression + ';}');
         } catch (ex) {
             console.warn(ex, 'with(this){'  + fnVars + fnBody + ';}');
             fn = function () {}
@@ -474,7 +485,7 @@
         cacheExpressions.set(expression, fn);
 
         return function (context, localContext) {
-            return fn.call(context, localContext || {});
+            return fn.call(context, localContext || {}, filterWrapper);
         }
     }
 
@@ -486,11 +497,43 @@
         return createFunction(expression, scope);
     }
 
-    function invokeFilter (name) {
-        var filter = Ve.options.filters[name];
-        return filter ? filter() : identifier
+    function filterWrapper (filterName, args) {
+        return invokeFilter(filterName).apply(null, args)
     }
 
+    function detectExpressionFilters (expression) {
+        var filtersRegex = /(?:\|)(?:\s)(.*?)(?=\s|$)/g,
+            matchExpAndFilters = /[^\s]+(\D)(?:\|)[\s]?(.+?)(?=\s|$)/, // /^(.+)(?:\|)[\s]?(.+?)(?=\s|$)/,
+            filter,
+            filtersMatch = filtersRegex.test(expression),
+            filtersExpression = expression;
+
+        if (!filtersMatch) {
+            return expression;
+        }
+
+        filtersRegex.lastIndex = 0;
+        filtersExpression = expression.match(/^(.*?)[\|]/)[1].trim();
+
+        while ((filter = filtersRegex.exec(expression)) !== null) {
+            // This is necessary to avoid infinite loops with zero-width matches
+            if (filter.index === filtersRegex.lastIndex) {
+                filtersRegex.lastIndex++;
+            }
+
+            filtersExpression = 'filterWrapper("' + filter[1].split(':')[0] + '",[' + [filtersExpression].concat(filter[1].split(':').slice(1)).join(',') + '])';
+        }
+
+        return expression.replace(expression.match(matchExpAndFilters)[0], filtersExpression);
+    }
+
+    function invokeFilter (name) {
+        try {
+            return Ve.options.filters[name]();
+        } catch (ex) {
+            return identifier;
+        }
+    }
 
     function ViewContainer (el, view) {
         this._view = view;
@@ -538,16 +581,58 @@
     }
 
     function Ve (meta) {
+        var self = this;
         this.tree = [];
 
-        /*var originEventListener = HTMLElement.prototype.addEventListener;
-                HTMLElement.prototype.addEventListener = function (a, b, c) {
+        var arrayProto = Array.prototype;
+        var arrayMethods = Object.create(arrayProto);
+        [
+            'push',
+            'pop',
+            'shift',
+            'unshift',
+            'splice',
+            'sort',
+            'reverse'
+        ]
+        .forEach(function (method) {
+            // cache original method
+            var original = arrayProto[method];
 
-                originEventListener.call(this, a, function (event) {
-                    b(event);
-                    self.nextTick();
-                }, c);
-            }*/
+            Object.defineProperty(arrayMethods, method, {
+                value: function mutator () {
+
+                    var args = [], len = arguments.length;
+                    while ( len-- ) args[ len ] = arguments[ len ];
+
+                    var result = original.apply(this, args);
+
+                    switch (method) {
+                        case 'push':
+                        case 'unshift':
+                            inserted = args;
+                            break;
+                        case 'splice':
+                            inserted = args.slice(2);
+                            break
+                    }
+                    console.log('result: ', result);
+                    return result
+                },
+                enumerable: false,
+                writable: true,
+                configurable: true
+            });
+        });
+
+        /*var originEventListener = HTMLElement.prototype.addEventListener;
+        HTMLElement.prototype.addEventListener = function (eventName, callback, options) {
+
+            originEventListener.call(this, eventName, function (event) {
+                callback(event);
+                self.nextTick();
+            }, options);
+        }*/
     }
 
     var ASSET_TYPES = [
@@ -602,7 +687,6 @@
             node.directives[j].state = 0;
         }
     }
-
 
     /**
      * Default directives
@@ -692,6 +776,13 @@
         }
     });
 
+    Ve.directive('ve:content', function () {
+        return {
+            init: function () {},
+            update: noop
+        }
+    });
+
     Ve.directive('ve:style', function () {
         var updateElementStyles = function (element, expression, view) {
             var elementClasses = invokeExpression(expression)(this, view.localContext);
@@ -716,18 +807,18 @@
             /** @type {Function} */ ifStatement;
 
         return {
-            init: function (element, expression) {
+            init: function (element, expression, view) {
                 ifStatement = invokeExpression(expression);
 
                 viewContainer = new ViewContainer(element);
 
-                if (!ifStatement(this)) {
+                if (!ifStatement(this, view.localContext)) {
                     removed = true;
                     viewContainer.remove();
                 }
             },
-            update: function () {
-                var state = ifStatement(this);
+            update: function (element, expression, view) {
+                var state = ifStatement(this, view.localContext);
 
                 if (!state && !removed) {
                     removed = true;
@@ -785,7 +876,8 @@
         var listenerCb = function (expression, event) {
             var key = event.keyCode;
 
-            invokeExpression(expression + ' = "' + elementValue(event.target) + '"')(this);
+            var fn = new Function('l',  'with(l || this) {' + expression + ' = "' + elementValue(event.target) + '"; }');
+            fn.call(this);
 
             //ignore command, modifiers, arrows
             if (key === 91 || (15 < key && key < 19) || (37 <= key && key <= 40)) return;
@@ -817,8 +909,7 @@
                 element.addEventListener('change', listenerCb);
             },
             update: function (element, expression) {
-                var value = invokeExpression(expression)(this);
-                elementValue(element, value);
+                elementValue(element, invokeExpression(expression)(this));
             },
             destroy: function (element) {
                 element.removeEventListener('input', listenerCb);
@@ -833,8 +924,6 @@
             originElement,
             elementAnchor,
             exp,
-            filterName,
-            filterArgs,
             filter,
             trackBy,
             alias,
@@ -853,7 +942,11 @@
                 block,
                 index;
 
-            collection = filter.apply(null, [collection].concat(filterArgs));
+            if (!Array.isArray(collection)) {
+                return;
+            }
+
+            collection = filter ? filter(view.context, view.localContext) : collection;
             collectionLength = collection.length;
 
             if (aliasAs) {
@@ -983,7 +1076,6 @@
                 var lhs = match[1];
                 var rhs = match[2];
                 var trackByExp = match[4];
-                var filterSrt = '';
 
                 match = lhs.match(/^(?:(\s*[$\w]+)|\(\s*([$\w]+)\s*,\s*([$\w]+)\s*\))$/);
 
@@ -996,12 +1088,9 @@
                 alias = lhs;
                 aliasAs = match[3];
                 collectionName = trim(rhs.split('|')[0]);
-                collection =this[collectionName] || [];
+                collection = this[collectionName] || [];
 
-                filterStr = trim(rhs.split('|')[1] || '');
-                filterName = filterStr && filterStr.split(':')[0];
-                filterArgs = (filterStr && filterStr.split(':').slice(1)) || [];
-                filter = invokeFilter(filterName);
+                filter = rhs.indexOf('|') && invokeExpression(detectExpressionFilters(rhs));
 
                 elementAnchor = document.createComment('ve:for');
                 originElement = element.cloneNode(true);
@@ -1023,6 +1112,7 @@
      *  - slice
      *  - json
      * 	- lowercase
+     * 	- limitTo
      * 	- uppercase
      */
 
@@ -1050,12 +1140,21 @@
         }
     });
 
+    Ve.filter('limitTo', function () {
+        return function (value, limit) {
+            if (value.length > limit) {
+                return value.substring(0, limit);
+            }
+            return value;
+        }
+    });
+
     Ve.filter('slice', function () {
         return function (value, begin, end) {
             if (!isArray(value)) {
                 return value;
             }
-            return value.slice(begin, end);
+            return value.slice(begin, end || -1);
         }
     });
 
@@ -1079,8 +1178,33 @@
 
             return parent;
         },
-        init: function (nodes) {
+
+        initBindings: function (nodes) {
             this.bootstrapped = true;
+
+            function map (nodes) {
+                for (var i = 0; i < nodes.length; i++) {
+
+                    if (nodes[i].view.children.length) {
+                        map(nodes[i].view.children);
+                    }
+
+                    for (var g in nodes[i].bindings) {
+                        nodes[i].bindings[g].call(
+                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
+                            nodes[i].localContext
+                        );
+                    }
+                }
+            }
+
+            map(nodes || this.tree);
+            this.init = true;
+        },
+
+        initView: function (nodes) {
+            this.bootstrapped = true;
+            this.initBindings();
 
             function map (nodes) {
                 for (var i = 0; i < nodes.length; i++) {
@@ -1099,18 +1223,13 @@
 
                         nodes[i].directives[j].state = 1;
                     }
-
-                    for (var g in nodes[i].bindings) {
-                        nodes[i].bindings[g].call(
-                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                            nodes[i].localContext || {}
-                        );
-                    }
                 }
             }
 
             map(nodes || this.tree);
+            this.initBindings();
             this.init = true;
+            console.log(this)
         },
 
         nextTick: function (nodes) {
@@ -1145,33 +1264,15 @@
             map(nodes || this.tree);
         },
 
-        interpolations: function (textElement, view) {
+        interpolations: function (textElement) {
             var clone = textElement.cloneNode(true);
             var interpolationTokens = textElement.textContent.match(/\{\{(.*?)\}\}/g);
 
             if (interpolationTokens) {
 
-                function interpolate (locals) {
-                    var self = this;
-
+                function interpolate (scope, locals) {
                     var textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (match, x, offset, string) {
-                        var exp = x.replace(/\s/g, '').split('|');
-                        var path = trim(exp[0]).split('.');
-                        var filter = (exp[1] && invokeFilter(trim(exp[1]))) || identifier;
-                        var val;
-
-                        for (var n in path) {
-                            try {
-                                val = (val && val[path[n]]);
-                                val = isUndef(val) ? (self[path[n]] || locals[path[n]]): val;
-                            }
-                            catch (ex) {
-                                val = null;
-                                console.error(clone.textContent)
-                            }
-                        }
-
-                        return isUndef(val) ? '' : (filter ? filter(val) : val);
+                        return invokeExpression(x)(scope, locals);
                     });
 
                     if (textElement.textContent !== textContent) {
@@ -1179,18 +1280,19 @@
                     }
                 }
 
-                view.directives.push({
+                return {
                     element: textElement,
                     expression: textElement.textContent,
+                    isComponent: false,
                     fn: {
                         init: function (element, expression, view) {
-                            interpolate.call(this, view.localContext)
+                            interpolate(this, view.localContext)
                         },
                         update: function (element, expression, view) {
-                            interpolate.call(this, view.localContext)
+                            interpolate(this, view.localContext)
                         }
                     }
-                });
+                };
             }
 
             return false;
@@ -1200,11 +1302,10 @@
             var self = this;
             var component;
             var contentProjectionElement;
-            var viewContent;
             var view = {
                 component: (parent && parent.cmp) || {},
                 context: parent && (parent.context || parent.cmp || {}),
-                localContext: localContext || {},
+                localContext: localContext,
                 name: (element.tagName || '').toLocaleLowerCase(),
                 element: element,
                 parent: parent,
@@ -1227,8 +1328,26 @@
 
                 var ComponentContext = (function ComponentContext() {
                     function ComponentContext (data) {
-                        Object.assign(this, data);
+
+                        forEach(data, function (val, keyName) {
+                           Object.defineProperty(this, keyName, {
+                               enumerable: false,
+                               configurable: true,
+                               get: function () {
+                                   return typeof this['_' + keyName] === 'undefined' ? val : this['_' + keyName];
+                               },
+                               set: function (val) {
+                                   this['_' + keyName] = val;
+                                   self.nextTick();
+                               }
+                           })
+                        }, this);
+
+                        this.$el = view.element;
+                        this.$attrs = view.attrs;
+                        this.updateView = self.nextTick;
                     }
+
                     return ComponentContext;
                 }());
 
@@ -1239,17 +1358,12 @@
                 view.context = new ComponentContext(component.data);
                 view.template = component.template;
 
-                viewContent = view.element.innerHTML;
+                view.content = view.element.innerHTML;
                 element.innerHTML = component.template;
-
-                contentProjectionElement = element.querySelector('[ve-content]');
-                if (contentProjectionElement) {
-                    // TODO: bootstrap view then bootstrap content !???
-                    //	this.bootstrap(viewContent, contentProjectionElement);
-                }
 
                 for (var j = 0; j < view.attrs.length; j++) {
                     var attr = view.attrs[j];
+
                     if (attr.name.match(PROP_BIND_REGEXP) && !view.viewContainer) {
                         var attrName = attr.name.match(PROP_BIND_REGEXP)[1];
                         element.removeAttribute('[prop.' + attrName + ']');
@@ -1262,8 +1376,6 @@
                                 view.context[propName] = fn(this, localContext);
                             }
                         })(attrName, attr.value));
-
-                        view.bindings[view.bindings.length-1].call(view.parent.context, localContext);
                     }
                 }
             }
@@ -1271,11 +1383,18 @@
             if (element.nodeType === 1 || element.nodeType === 9) {
                 for (var j = 0; j < view.attrs.length; j++) {
                     var attr = view.attrs[j];
+                    var name = directiveNormalize(attr.name);
 
-                    if (Ve.options.directives[directiveNormalize(attr.name)]) {
+                    if (!Ve.options.directives[name]) {
+                        continue;
+                    }
+
+                    try {
+                        var directive = Ve.options.directives[name];
+
                         if (!view.viewContainer || isTemplateDirective([attr])) {
                             view.directives.push({
-                                fn: Ve.options.directives[directiveNormalize(attr.name)].call(this),
+                                fn: directive.call(this),
                                 element: element,
                                 expression: attr.value,
                                 view: view
@@ -1283,9 +1402,8 @@
 
                             view.element.removeAttribute(attr.name);
                         }
-                        else {
-                            element.setAttribute(attr.name, attr.value);
-                        }
+                    } catch (e) {
+                        console.warn(attr.name, e);
                     }
                 }
 
