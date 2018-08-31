@@ -39,8 +39,8 @@
                 <span ve:click="editTodo(todo)" class="close edit">Edit</span>
                 <span ve:click="removeTodo(todo)" class="close">×</span>
             </li>
-            <item-json ve:for="todo in todos track by id" todo="todo"></item-json>
         </ul>
+        <item-json ve:for="todo in todos track by id" todo="todo"></item-json>
     </div>
 
     <test [prop.array]="bindedProp"></test>
@@ -144,9 +144,9 @@
         template: document.getElementsByTagName('app')[0].innerHTML
     });
 
-    var app = new Ve();
-    app.bootstrap(document.getElementsByTagName('app')[0]);
-    app.initView();
+    var app = new Ve({
+        selector: 'app'
+    });
 </script>
 </body>
 </html>

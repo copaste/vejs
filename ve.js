@@ -8,6 +8,8 @@
      */
 
     var msie,
+        viewTree = [],
+        APP_ID = 0,
         slice = [].slice,
         splice = [].splice,
         push = [].push,
@@ -502,7 +504,7 @@
     }
 
     function detectExpressionFilters (expression) {
-        var filtersRegex = /(?:\|)(?:\s)(.*?)(?=\s|$)/g,
+        var filtersRegex = /(?:\s|\w)(?:\|)(?:\s)(.*?)(?=\s|$)/g,
             matchExpAndFilters = /[^\s]+(\D)(?:\|)[\s]?(.+?)(?=\s|$)/, // /^(.+)(?:\|)[\s]?(.+?)(?=\s|$)/,
             filter,
             filtersMatch = filtersRegex.test(expression),
@@ -581,8 +583,17 @@
     }
 
     function Ve (meta) {
-        var self = this;
-        this.tree = [];
+        this.$appId = APP_ID++;
+
+        if (typeof meta.selector === 'string' ) {
+            this.$rootElement = document.querySelector(meta.selector);
+        }
+        if (meta.selector instanceof HTMLElement) {
+            this.$rootElement = meta.selector;
+        }
+
+        this.$viewNodeTree = bootstrap(this.$appId, this.$rootElement);
+        initView([this.$viewNodeTree]);
 
         var arrayProto = Array.prototype;
         var arrayMethods = Object.create(arrayProto);
@@ -624,15 +635,6 @@
                 configurable: true
             });
         });
-
-        /*var originEventListener = HTMLElement.prototype.addEventListener;
-        HTMLElement.prototype.addEventListener = function (eventName, callback, options) {
-
-            originEventListener.call(this, eventName, function (event) {
-                callback(event);
-                self.nextTick();
-            }, options);
-        }*/
     }
 
     var ASSET_TYPES = [
@@ -682,10 +684,276 @@
         }
 
         for (var j in node.directives) {
-            isFunction(node.directives[j].fn.destroy) &&
-            node.directives[j].fn.destroy(node.directives[j].element);
+            isFunction(node.directives[j].destroy) &&
+            node.directives[j].destroy(node.directives[j].el);
             node.directives[j].state = 0;
         }
+    }
+
+    function bootstrap (appId, node, parentViewNode, localContext) {
+        var children,
+            len,
+            parentViewNode = parentViewNode || null;
+
+        parentViewNode = createView(appId, node, parentViewNode, localContext);
+        children = node.childNodes;
+        len = children.length;
+
+        if (parentViewNode.viewContainer) {
+            return;
+        }
+
+        for (var i = 0; i < len; i++) {
+            bootstrap(appId, children[i], parentViewNode, localContext);
+        }
+
+        return parentViewNode;
+    }
+
+    function initBindings (nodes) {
+        for (var i = 0; i < nodes.length; i++) {
+
+            if (nodes[i].view.children.length) {
+                initBindings(nodes[i].view.children);
+            }
+
+            for (var g in nodes[i].bindings) {
+                nodes[i].bindings[g].call(
+                    nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
+                    nodes[i].localContext
+                );
+            }
+        }
+    }
+
+    function initView (nodes) {
+        initBindings(nodes);
+
+        for (var i = 0; i < nodes.length; i++) {
+
+            if (nodes[i].view.children.length) {
+                initView(nodes[i].view.children, nodes[i].context);
+            }
+
+            for (var j in nodes[i].directives) {
+                nodes[i].directives[j].init(
+                    nodes[i].directives[j].el,
+                    nodes[i].directives[j].meta,
+                    nodes[i].isComponent ? nodes[i].parent : nodes[i]
+                );
+
+                nodes[i].directives[j].state = 1;
+            }
+        }
+
+        initBindings(nodes);
+    }
+
+    function nextTick (nodes, appId) {
+        nodes = nodes || viewTree[appId];
+
+        for (var i = 0; i < nodes.length; i++) {
+            if (nodes[i].view.children.length) {
+                nextTick(nodes[i].view.children);
+            }
+
+            for (var j in nodes[i].directives) {
+                var execFn = nodes[i].directives[j].state ? 'update':'init';
+
+                nodes[i].directives[j][execFn] && nodes[i].directives[j][execFn](
+                    nodes[i].directives[j].el,
+                    nodes[i].directives[j].meta,
+                    nodes[i].directives[j].viewNode
+                );
+
+                nodes[i].directives[j].state = 1;
+            }
+
+            for (var g in nodes[i].bindings) {
+                nodes[i].bindings[g].call(
+                    nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
+                    nodes[i].localContext || {}
+                );
+            }
+        }
+    }
+
+    function interpolations (textElement, view) {
+        var clone = textElement.cloneNode(true);
+        var interpolationTokens = textElement.textContent.match(/\{\{(.*?)\}\}/g);
+
+        if (interpolationTokens) {
+
+            function interpolate (scope, locals) {
+                var textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (match, x, offset, string) {
+                    return invokeExpression(x)(scope, locals);
+                });
+
+                if (textElement.textContent !== textContent) {
+                    textElement.textContent = textContent;
+                }
+            }
+
+            return {
+                el: textElement,
+                meta: { expression: textElement.textContent },
+                viewNode: view,
+                isComponent: false,
+                init: function (element, meta, view) {
+                    interpolate(view.context, view.localContext)
+                },
+                update: function (element, meta, view) {
+                    interpolate(view.context, view.localContext)
+                }
+            };
+        }
+
+        return false;
+    }
+
+    function createView (appId, element, parentViewNode, localContext) {
+        var self = this;
+        var component;
+        var contentProjectionElement;
+        var view = {
+            appId: appId,
+            component: (parentViewNode && parentViewNode.cmp) || {},
+            context: parentViewNode && (parentViewNode.context || parentViewNode.cmp || {}),
+            localContext: localContext,
+            name: (element.tagName || '').toLocaleLowerCase(),
+            element: element,
+            parent: parentViewNode,
+            content: {
+                children: []
+            },
+            view: {
+                children: []
+            },
+            type: element.nodeType,
+            attrs: Array.prototype.slice.call(element.attributes || []),
+            directives: [],
+            bindings: [],
+            index: parentViewNode ? parentViewNode.view.children.length : 0,
+            viewContainer: isTemplateDirective(element.attributes)
+        };
+
+        if (Ve.options.components[view.name]) {
+            component = Ve.options.components[view.name];
+
+            var ComponentContext = (function ComponentContext() {
+                function ComponentContext (data) {
+
+                    forEach(data, function (val, keyName) {
+                        Object.defineProperty(this, keyName, {
+                            enumerable: false,
+                            configurable: true,
+                            get: function () {
+                                return typeof this['_' + keyName] === 'undefined' ? val : this['_' + keyName];
+                            },
+                            set: function (val) {
+                                this['_' + keyName] = val;
+                                this.updateView();
+                            }
+                        })
+                    }, this);
+
+                    this.$el = view.element;
+                    this.$attrs = view.attrs;
+                    this.$appId = appId;
+                    this.updateView = function () { return nextTick(null, this.$appId) };
+                }
+
+                return ComponentContext;
+            }());
+
+            ComponentContext.prototype = Object.create(component.methods);
+
+            view.isComponent = true;
+            view.component = component;
+            view.context = new ComponentContext(component.data);
+            view.template = component.template;
+
+            view.content = view.element.innerHTML;
+            element.innerHTML = component.template;
+
+            for (var j = 0; j < view.attrs.length; j++) {
+                var attr = view.attrs[j];
+
+                if (attr.name.match(PROP_BIND_REGEXP) && !view.viewContainer) {
+                    var attrName = attr.name.match(PROP_BIND_REGEXP)[1];
+                    element.removeAttribute('[prop.' + attrName + ']');
+
+                    view.bindings.push((function(propName, value) {
+                        var fn = invokeExpression(value);
+
+                        return function (localContext) {
+                            // TODO: Compare new and old value
+                            view.context[propName] = fn(this, localContext);
+                        }
+                    })(attrName, attr.value));
+                }
+            }
+        }
+
+        if (element.nodeType === 1 || element.nodeType === 9) {
+            for (var j = 0; j < view.attrs.length; j++) {
+                var attr = view.attrs[j];
+                var name = directiveNormalize(attr.name);
+
+                if (!Ve.options.directives[name]) {
+                    continue;
+                }
+
+                try {
+                    var directive = Ve.options.directives[name]();
+                    directive.el = element;
+                    directive.meta = { expression: attr.value };
+                    directive.isComponent = false;
+                    directive.viewNode = view;
+
+                    if (!view.viewContainer || isTemplateDirective([attr])) {
+                        view.directives.push(directive);
+                        view.element.removeAttribute(attr.name);
+                    }
+                } catch (e) {
+                    console.warn(attr.name, e);
+                }
+            }
+
+            for (var j = 0; j < view.attrs.length; j++) {
+                var attr = view.attrs[j];
+
+                if (attr.name.match(ATTR_BIND_REGEXP) && !view.viewContainer) {
+                    view.bindings.push(
+                        attributeBind(element, attr.name.match(ATTR_BIND_REGEXP)[1], attr.value)
+                    );
+                }
+            }
+        }
+
+        if (view.viewContainer) {
+            view.element = document.createComment('ve:for');
+            view.name = 'comment';
+            view.type = view.element.nodeType;
+            console.log(view)
+        }
+
+        if (view.type === 3) {
+            var interpolationDir = interpolations(element, view);
+            interpolationDir && view.directives.push(interpolationDir);
+        }
+
+        if (parentViewNode && parentViewNode.view) {
+            parentViewNode.view.children.push(view);
+        }
+        else {
+            if (!viewTree[appId]) {
+                viewTree[appId] = [];
+            }
+            viewTree[appId].push(view);
+        }
+
+        return view;
     }
 
     /**
@@ -701,15 +969,14 @@
                     cb;
 
                 return {
-                    init: function (element, expression, view) {
-                        var self = this,
-                            localContext = view.localContext || {},
-                            fn = invokeExpression(expression);
+                    init: function (element, meta, view) {
+                        var fn = invokeExpression(meta.expression),
+                            localContext = isDef(view.localContext) ? view.localContext : {};
 
                         cb = function (event) {
                             localContext['$event'] = event;
-                            fn(self, localContext);
-                            instance.nextTick();
+                            fn(view.context, localContext);
+                            nextTick(null, view.appId);
                         };
 
                         element.addEventListener(eventName, cb);
@@ -743,8 +1010,8 @@
             return (index >= 0);
         }
 
-        var updateElementClass = function (element, expression, view) {
-            var elementClasses = invokeExpression(expression)(this, view.localContext);
+        var updateElementClass = function (element, meta, view) {
+            var elementClasses = invokeExpression(meta.expression)(view.context, view.localContext);
 
             if (!changes.diff(elementClasses)) {
                 return;
@@ -784,8 +1051,8 @@
     });
 
     Ve.directive('ve:style', function () {
-        var updateElementStyles = function (element, expression, view) {
-            var elementClasses = invokeExpression(expression)(this, view.localContext);
+        var updateElementStyles = function (element, meta, view) {
+            var elementClasses = invokeExpression(meta.expression)(view.context, view.localContext);
 
 
             if (!Array.isArray(elementClasses) && typeof elementClasses === 'object') {
@@ -807,18 +1074,18 @@
             /** @type {Function} */ ifStatement;
 
         return {
-            init: function (element, expression, view) {
-                ifStatement = invokeExpression(expression);
+            init: function (element, meta, view) {
+                ifStatement = invokeExpression(meta.expression);
 
                 viewContainer = new ViewContainer(element);
 
-                if (!ifStatement(this, view.localContext)) {
+                if (!ifStatement(view.context, view.localContext)) {
                     removed = true;
                     viewContainer.remove();
                 }
             },
-            update: function (element, expression, view) {
-                var state = ifStatement(this, view.localContext);
+            update: function (element, meta, view) {
+                var state = ifStatement(view.context, view.localContext);
 
                 if (!state && !removed) {
                     removed = true;
@@ -873,7 +1140,7 @@
             }
         }
 
-        var listenerCb = function (expression, event) {
+        var listenerCb = function (expression, view, event) {
             var key = event.keyCode;
 
             var fn = new Function('l',  'with(l || this) {' + expression + ' = "' + elementValue(event.target) + '"; }');
@@ -882,15 +1149,15 @@
             //ignore command, modifiers, arrows
             if (key === 91 || (15 < key && key < 19) || (37 <= key && key <= 40)) return;
 
-            instance.nextTick();
+            nextTick(null, view.appId);
         };
 
         return {
-            init: function (element, expression) {
-                var modelValue = invokeExpression(expression)(this);
+            init: function (element, meta, view) {
+                var modelValue = invokeExpression(meta.expression)(view.context);
                 var msie = parseInt((/msie (\d+)/.exec(lowercase(navigator.userAgent)) || [])[1]);
 
-                listenerCb = listenerCb.bind(this, expression);
+                listenerCb = listenerCb.bind(view.context, meta.expression, view);
 
                 if (!isUndef(modelValue)) {
                     elementValue(element, modelValue);
@@ -908,8 +1175,8 @@
                 // if user paste into input using mouse, we need "change" event to catch it
                 element.addEventListener('change', listenerCb);
             },
-            update: function (element, expression) {
-                elementValue(element, invokeExpression(expression)(this));
+            update: function (element, meta, view) {
+                elementValue(element, invokeExpression(meta.expression)(view.context, view.localContext));
             },
             destroy: function (element) {
                 element.removeEventListener('input', listenerCb);
@@ -1016,7 +1283,7 @@
                     nextBlockMap[block.id].context = new ForContext(value, collection, index, collection.length);
                     nextBlockMap[block.id].context[alias] = value;
 
-                    nextBlockMap[block.id].view = instance.bootstrap(clone, view.parent, nextBlockMap[block.id].context);
+                    nextBlockMap[block.id].view = bootstrap(view.appId, clone, view.parent, nextBlockMap[block.id].context);
 
                     if (fragment.children.length) {
                         fragment.appendChild(clone);
@@ -1063,10 +1330,8 @@
         }());
 
         return {
-            init: function (element, expression, view) {
-                var self = this;
-
-                exp = expression;
+            init: function (element, meta, view) {
+                exp = meta.expression;
                 match = exp.match(/^\s*([\s\S]+?)\s+in\s+([\s\S]+?)(?:\s+as\s+([\s\S]+?))?(?:\s+track\s+by\s+([\s\S]+?))?\s*$/);
 
                 if (!match) {
@@ -1088,7 +1353,7 @@
                 alias = lhs;
                 aliasAs = match[3];
                 collectionName = trim(rhs.split('|')[0]);
-                collection = this[collectionName] || [];
+                collection = view.context[collectionName] || [];
 
                 filter = rhs.indexOf('|') && invokeExpression(detectExpressionFilters(rhs));
 
@@ -1100,8 +1365,8 @@
 
                 listUpdate(collection, view);
             },
-            update: function (element, expression, view) {
-                listUpdate(this[collectionName], view);
+            update: function (element, meta, view) {
+                listUpdate(view.context[collectionName], view);
             }
         }
     });
@@ -1157,288 +1422,6 @@
             return value.slice(begin, end || -1);
         }
     });
-
-    Ve.prototype = {
-        bootstrap: function (node, parent, localContext) {
-            var children,
-                len,
-                parent = parent || null;
-
-            parent = this.createView(node, parent, localContext);
-            children = node.childNodes;
-            len = children.length;
-
-            if (parent.viewContainer) {
-                return;
-            }
-
-            for (var i = 0; i < len; i++) {
-                this.bootstrap(children[i], parent, localContext);
-            }
-
-            return parent;
-        },
-
-        initBindings: function (nodes) {
-            this.bootstrapped = true;
-
-            function map (nodes) {
-                for (var i = 0; i < nodes.length; i++) {
-
-                    if (nodes[i].view.children.length) {
-                        map(nodes[i].view.children);
-                    }
-
-                    for (var g in nodes[i].bindings) {
-                        nodes[i].bindings[g].call(
-                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                            nodes[i].localContext
-                        );
-                    }
-                }
-            }
-
-            map(nodes || this.tree);
-            this.init = true;
-        },
-
-        initView: function (nodes) {
-            this.bootstrapped = true;
-            this.initBindings();
-
-            function map (nodes) {
-                for (var i = 0; i < nodes.length; i++) {
-
-                    if (nodes[i].view.children.length) {
-                        map(nodes[i].view.children, nodes[i].context);
-                    }
-
-                    for (var j in nodes[i].directives) {
-                        nodes[i].directives[j].fn.init.call(
-                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                            nodes[i].directives[j].element,
-                            nodes[i].directives[j].expression,
-                            nodes[i]
-                        );
-
-                        nodes[i].directives[j].state = 1;
-                    }
-                }
-            }
-
-            map(nodes || this.tree);
-            this.initBindings();
-            this.init = true;
-            console.log(this)
-        },
-
-        nextTick: function (nodes) {
-            function map (nodes) {
-                for (var i = 0; i < nodes.length; i++) {
-                    if (nodes[i].view.children.length) {
-                        map(nodes[i].view.children, nodes[i].context);
-                    }
-
-                    for (var j in nodes[i].directives) {
-                        var execFn = nodes[i].directives[j].state ? 'update':'init';
-
-                        nodes[i].directives[j].fn[execFn] && nodes[i].directives[j].fn[execFn].call(
-                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                            nodes[i].directives[j].element,
-                            nodes[i].directives[j].expression,
-                            nodes[i]
-                        );
-
-                        nodes[i].directives[j].state = 1;
-                    }
-
-                    for (var g in nodes[i].bindings) {
-                        nodes[i].bindings[g].call(
-                            nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                            nodes[i].localContext || {}
-                        );
-                    }
-                }
-            }
-
-            map(nodes || this.tree);
-        },
-
-        interpolations: function (textElement) {
-            var clone = textElement.cloneNode(true);
-            var interpolationTokens = textElement.textContent.match(/\{\{(.*?)\}\}/g);
-
-            if (interpolationTokens) {
-
-                function interpolate (scope, locals) {
-                    var textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (match, x, offset, string) {
-                        return invokeExpression(x)(scope, locals);
-                    });
-
-                    if (textElement.textContent !== textContent) {
-                        textElement.textContent = textContent;
-                    }
-                }
-
-                return {
-                    element: textElement,
-                    expression: textElement.textContent,
-                    isComponent: false,
-                    fn: {
-                        init: function (element, expression, view) {
-                            interpolate(this, view.localContext)
-                        },
-                        update: function (element, expression, view) {
-                            interpolate(this, view.localContext)
-                        }
-                    }
-                };
-            }
-
-            return false;
-        },
-
-        createView: function (element, parent, localContext) {
-            var self = this;
-            var component;
-            var contentProjectionElement;
-            var view = {
-                component: (parent && parent.cmp) || {},
-                context: parent && (parent.context || parent.cmp || {}),
-                localContext: localContext,
-                name: (element.tagName || '').toLocaleLowerCase(),
-                element: element,
-                parent: parent,
-                content: {
-                    children: []
-                },
-                view: {
-                    children: []
-                },
-                type: element.nodeType,
-                attrs: Array.prototype.slice.call(element.attributes || []),
-                directives: [],
-                bindings: [],
-                index: parent ? parent.view.children.length : 0,
-                viewContainer: isTemplateDirective(element.attributes)
-            };
-
-            if (Ve.options.components[view.name]) {
-                component = Ve.options.components[view.name];
-
-                var ComponentContext = (function ComponentContext() {
-                    function ComponentContext (data) {
-
-                        forEach(data, function (val, keyName) {
-                           Object.defineProperty(this, keyName, {
-                               enumerable: false,
-                               configurable: true,
-                               get: function () {
-                                   return typeof this['_' + keyName] === 'undefined' ? val : this['_' + keyName];
-                               },
-                               set: function (val) {
-                                   this['_' + keyName] = val;
-                                   self.nextTick();
-                               }
-                           })
-                        }, this);
-
-                        this.$el = view.element;
-                        this.$attrs = view.attrs;
-                        this.updateView = self.nextTick;
-                    }
-
-                    return ComponentContext;
-                }());
-
-                ComponentContext.prototype = Object.create(component.methods);
-
-                view.isComponent = true;
-                view.component = component;
-                view.context = new ComponentContext(component.data);
-                view.template = component.template;
-
-                view.content = view.element.innerHTML;
-                element.innerHTML = component.template;
-
-                for (var j = 0; j < view.attrs.length; j++) {
-                    var attr = view.attrs[j];
-
-                    if (attr.name.match(PROP_BIND_REGEXP) && !view.viewContainer) {
-                        var attrName = attr.name.match(PROP_BIND_REGEXP)[1];
-                        element.removeAttribute('[prop.' + attrName + ']');
-
-                        view.bindings.push((function(propName, value) {
-                            var fn = invokeExpression(value);
-
-                            return function (localContext) {
-                                // TODO: Compare new and old value
-                                view.context[propName] = fn(this, localContext);
-                            }
-                        })(attrName, attr.value));
-                    }
-                }
-            }
-
-            if (element.nodeType === 1 || element.nodeType === 9) {
-                for (var j = 0; j < view.attrs.length; j++) {
-                    var attr = view.attrs[j];
-                    var name = directiveNormalize(attr.name);
-
-                    if (!Ve.options.directives[name]) {
-                        continue;
-                    }
-
-                    try {
-                        var directive = Ve.options.directives[name];
-
-                        if (!view.viewContainer || isTemplateDirective([attr])) {
-                            view.directives.push({
-                                fn: directive.call(this),
-                                element: element,
-                                expression: attr.value,
-                                view: view
-                            });
-
-                            view.element.removeAttribute(attr.name);
-                        }
-                    } catch (e) {
-                        console.warn(attr.name, e);
-                    }
-                }
-
-                for (var j = 0; j < view.attrs.length; j++) {
-                    var attr = view.attrs[j];
-
-                    if (attr.name.match(ATTR_BIND_REGEXP) && !view.viewContainer) {
-                        view.bindings.push(
-                            attributeBind(element, attr.name.match(ATTR_BIND_REGEXP)[1], attr.value)
-                        );
-                    }
-                }
-
-                if (view.viewContainer) {
-                    view.element = document.createComment('ve:for');
-                    view.name = 'comment';
-                    view.type = view.element.nodeType;
-                }
-            }
-
-            if (view.type === 3) {
-                var interpolationDir = this.interpolations(element, view);
-                interpolationDir && view.directives.push(interpolationDir);
-            }
-
-            if (parent && parent.view) {
-                parent.view.children.push(view);
-            }
-            else {
-                this.tree.push(view);
-            }
-
-            return view;
-        }
-    };
 
     if ( typeof module != 'undefined' && module.exports ) {
         module.exports = Ve;
