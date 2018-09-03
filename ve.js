@@ -677,19 +677,6 @@
         Ve.options[type + 's'] = Object.create(null);
     });
 
-    // Destroy View
-    function destroy (node) {
-        for (var i = 0; i < node.view.children.length; i++) {
-            destroy(node.view.children[i]);
-        }
-
-        for (var j in node.directives) {
-            isFunction(node.directives[j].destroy) &&
-            node.directives[j].destroy(node.directives[j].el);
-            node.directives[j].state = 0;
-        }
-    }
-
     function bootstrap (appId, node, parentViewNode, localContext) {
         var children,
             len,
@@ -710,111 +697,85 @@
         return parentViewNode;
     }
 
-    function initBindings (nodes) {
-        for (var i = 0; i < nodes.length; i++) {
+    function initComponentBindings (viewNode) {
+        for (var j = 0; j < viewNode.attrs.length; j++) {
+            var attr = viewNode.attrs[j];
 
-            if (nodes[i].view.children.length) {
-                initBindings(nodes[i].view.children);
-            }
+            if (attr.name.match(PROP_BIND_REGEXP) && !viewNode.viewContainer) {
+                var attrName = attr.name.match(PROP_BIND_REGEXP)[1];
+                viewNode.element.removeAttribute('[prop.' + attrName + ']');
 
-            for (var g in nodes[i].bindings) {
-                nodes[i].bindings[g].call(
-                    nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                    nodes[i].localContext
-                );
-            }
-        }
-    }
+                viewNode.bindings.push((function(propName, value) {
+                    var fn = invokeExpression(value);
 
-    function initView (nodes) {
-        initBindings(nodes);
-
-        for (var i = 0; i < nodes.length; i++) {
-
-            if (nodes[i].view.children.length) {
-                initView(nodes[i].view.children, nodes[i].context);
-            }
-
-            for (var j in nodes[i].directives) {
-                nodes[i].directives[j].init(
-                    nodes[i].directives[j].el,
-                    nodes[i].directives[j].meta,
-                    nodes[i].isComponent ? nodes[i].parent : nodes[i]
-                );
-
-                nodes[i].directives[j].state = 1;
-            }
-        }
-
-        initBindings(nodes);
-    }
-
-    function nextTick (nodes, appId) {
-        nodes = nodes || viewTree[appId];
-
-        for (var i = 0; i < nodes.length; i++) {
-            if (nodes[i].view.children.length) {
-                nextTick(nodes[i].view.children);
-            }
-
-            for (var j in nodes[i].directives) {
-                var execFn = nodes[i].directives[j].state ? 'update':'init';
-
-                nodes[i].directives[j][execFn] && nodes[i].directives[j][execFn](
-                    nodes[i].directives[j].el,
-                    nodes[i].directives[j].meta,
-                    nodes[i].directives[j].viewNode
-                );
-
-                nodes[i].directives[j].state = 1;
-            }
-
-            for (var g in nodes[i].bindings) {
-                nodes[i].bindings[g].call(
-                    nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
-                    nodes[i].localContext || {}
-                );
+                    return function (localContext) {
+                        // TODO: Compare new and old value
+                        viewNode.context[propName] = fn(this, localContext);
+                    }
+                })(attrName, attr.value));
             }
         }
     }
 
-    function interpolations (textElement, view) {
-        var clone = textElement.cloneNode(true);
-        var interpolationTokens = textElement.textContent.match(/\{\{(.*?)\}\}/g);
+    function collectDirectives (viewNode) {
+        switch (viewNode.type) {
+            case 1:
+            case 9:
+                for (var j = 0; j < viewNode.attrs.length; j++) {
+                    var attr = viewNode.attrs[j];
+                    var name = directiveNormalize(attr.name);
 
-        if (interpolationTokens) {
+                    if (!Ve.options.directives[name]) {
+                        continue;
+                    }
 
-            function interpolate (scope, locals) {
-                var textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (match, x, offset, string) {
-                    return invokeExpression(x)(scope, locals);
-                });
+                    try {
+                        var directive = Ve.options.directives[name]();
+                        directive.el = viewNode.element;
+                        directive.meta = { expression: attr.value };
+                        directive.isComponent = false;
+                        directive.viewNode = viewNode;
 
-                if (textElement.textContent !== textContent) {
-                    textElement.textContent = textContent;
+                        if (viewNode.viewContainer) {
+                            viewNode.element = document.createComment('ve:for');
+                            viewNode.name = 'comment';
+                            viewNode.type = viewNode.element.nodeType;
+                        }
+
+
+                        if (!viewNode.isTemplateDirective || isTemplateDirective([attr])) {
+                            viewNode.directives.push(directive);
+                            viewNode.element.removeAttribute(attr.name);
+
+                        }
+
+
+                    } catch (e) {
+                        console.warn(attr.name, e);
+                    }
                 }
-            }
-
-            return {
-                el: textElement,
-                meta: { expression: textElement.textContent },
-                viewNode: view,
-                isComponent: false,
-                init: function (element, meta, view) {
-                    interpolate(view.context, view.localContext)
-                },
-                update: function (element, meta, view) {
-                    interpolate(view.context, view.localContext)
-                }
-            };
+                break;
+            case 3:
+                var interpolationDirective = interpolations(viewNode.element, viewNode);
+                interpolationDirective && viewNode.directives.push(interpolationDirective);
+                break;
         }
+    }
 
-        return false;
+    function addAttrInterpolateDirective (viewNode) {
+        for (var j = 0; j < viewNode.attrs.length; j++) {
+            var attr = viewNode.attrs[j];
+
+            if (attr.name.match(ATTR_BIND_REGEXP) && !viewNode.viewContainer) {
+                viewNode.bindings.push(
+                    attributeBind(viewNode.element, attr.name.match(ATTR_BIND_REGEXP)[1], attr.value)
+                );
+            }
+        }
     }
 
     function createView (appId, element, parentViewNode, localContext) {
-        var self = this;
         var component;
-        var contentProjectionElement;
         var view = {
             appId: appId,
             component: (parentViewNode && parentViewNode.cmp) || {},
@@ -876,72 +837,11 @@
             view.content = view.element.innerHTML;
             element.innerHTML = component.template;
 
-            for (var j = 0; j < view.attrs.length; j++) {
-                var attr = view.attrs[j];
-
-                if (attr.name.match(PROP_BIND_REGEXP) && !view.viewContainer) {
-                    var attrName = attr.name.match(PROP_BIND_REGEXP)[1];
-                    element.removeAttribute('[prop.' + attrName + ']');
-
-                    view.bindings.push((function(propName, value) {
-                        var fn = invokeExpression(value);
-
-                        return function (localContext) {
-                            // TODO: Compare new and old value
-                            view.context[propName] = fn(this, localContext);
-                        }
-                    })(attrName, attr.value));
-                }
-            }
+            initComponentBindings(view);
         }
 
-        if (element.nodeType === 1 || element.nodeType === 9) {
-            for (var j = 0; j < view.attrs.length; j++) {
-                var attr = view.attrs[j];
-                var name = directiveNormalize(attr.name);
-
-                if (!Ve.options.directives[name]) {
-                    continue;
-                }
-
-                try {
-                    var directive = Ve.options.directives[name]();
-                    directive.el = element;
-                    directive.meta = { expression: attr.value };
-                    directive.isComponent = false;
-                    directive.viewNode = view;
-
-                    if (!view.viewContainer || isTemplateDirective([attr])) {
-                        view.directives.push(directive);
-                        view.element.removeAttribute(attr.name);
-                    }
-                } catch (e) {
-                    console.warn(attr.name, e);
-                }
-            }
-
-            for (var j = 0; j < view.attrs.length; j++) {
-                var attr = view.attrs[j];
-
-                if (attr.name.match(ATTR_BIND_REGEXP) && !view.viewContainer) {
-                    view.bindings.push(
-                        attributeBind(element, attr.name.match(ATTR_BIND_REGEXP)[1], attr.value)
-                    );
-                }
-            }
-        }
-
-        if (view.viewContainer) {
-            view.element = document.createComment('ve:for');
-            view.name = 'comment';
-            view.type = view.element.nodeType;
-            console.log(view)
-        }
-
-        if (view.type === 3) {
-            var interpolationDir = interpolations(element, view);
-            interpolationDir && view.directives.push(interpolationDir);
-        }
+        addAttrInterpolateDirective(view);
+        collectDirectives(view);
 
         if (parentViewNode && parentViewNode.view) {
             parentViewNode.view.children.push(view);
@@ -954,6 +854,143 @@
         }
 
         return view;
+    }
+
+    function initBindings (nodes) {
+        for (var i = 0; i < nodes.length; i++) {
+
+            if (nodes[i].view.children.length) {
+                initBindings(nodes[i].view.children);
+            }
+
+            for (var g in nodes[i].bindings) {
+                nodes[i].bindings[g].call(
+                    nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
+                    nodes[i].localContext
+                );
+            }
+        }
+    }
+
+    function initView (nodes) {
+        initBindings(nodes);
+
+        for (var i = 0; i < nodes.length; i++) {
+
+            if (nodes[i].view.children.length) {
+                initView(nodes[i].view.children, nodes[i].context);
+            }
+
+            for (var j in nodes[i].directives) {
+                nodes[i].directives[j].init(
+                    nodes[i].directives[j].el,
+                    nodes[i].directives[j].meta,
+                    nodes[i].isComponent ? nodes[i].parent : nodes[i]
+                );
+
+                nodes[i].directives[j].state = 1;
+            }
+        }
+
+        initBindings(nodes);
+    }
+
+    /**
+     * Destroy node and its children
+     * @param node
+     */
+    function destroy (node) {
+        for (var i = 0; i < node.view.children.length; i++) {
+            destroy(node.view.children[i]);
+        }
+
+        for (var j in node.directives) {
+            isFunction(node.directives[j].destroy) &&
+            node.directives[j].destroy(node.directives[j].el);
+            node.directives[j].state = 0;
+        }
+    }
+
+    function nextTick (nodes, appId) {
+        nodes = nodes || viewTree[appId];
+
+        for (var i = 0; i < nodes.length; i++) {
+            if (nodes[i].view.children.length) {
+                nextTick(nodes[i].view.children);
+            }
+
+            for (var j in nodes[i].directives) {
+                var execFn = nodes[i].directives[j].state ? 'update':'init';
+
+                nodes[i].directives[j][execFn] && nodes[i].directives[j][execFn](
+                    nodes[i].directives[j].el,
+                    nodes[i].directives[j].meta,
+                    nodes[i].directives[j].viewNode
+                );
+
+                nodes[i].directives[j].state = 1;
+            }
+
+            for (var g in nodes[i].bindings) {
+                nodes[i].bindings[g].call(
+                    nodes[i].isComponent ? nodes[i].parent.context : nodes[i].context,
+                    nodes[i].localContext || {}
+                );
+            }
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+    /**
+     * Register Default Directives
+     * - interpolation directive
+     * - event directives
+     * - veClass directive
+     * - veStyle directive
+     * - veIf directive
+     * - veModel directive
+     * - veFor directive
+     */
+
+    function interpolations (textElement, view) {
+        var clone = textElement.cloneNode(true);
+        var interpolationTokens = textElement.textContent.match(/\{\{(.*?)\}\}/g);
+
+        if (interpolationTokens) {
+
+            function interpolate (scope, locals) {
+                var textContent = clone.textContent.replace(/\{\{(.*?)\}\}/g, function (match, x, offset, string) {
+                    return invokeExpression(x)(scope, locals);
+                });
+
+                if (textElement.textContent !== textContent) {
+                    textElement.textContent = textContent;
+                }
+            }
+
+            return {
+                el: textElement,
+                meta: { expression: textElement.textContent },
+                viewNode: view,
+                isComponent: false,
+                init: function (element, meta, view) {
+                    interpolate(view.context, view.localContext)
+                },
+                update: function (element, meta, view) {
+                    interpolate(view.context, view.localContext)
+                }
+            };
+        }
+
+        return false;
     }
 
     /**
@@ -1217,7 +1254,7 @@
             collectionLength = collection.length;
 
             if (aliasAs) {
-                this[aliasAs]  = filter.apply(null, [collection].concat(filterArgs));
+                this[aliasAs] = filter(view.context, view.localContext);
             }
 
             // locate existing items from collection list
@@ -1282,7 +1319,7 @@
                     nextBlockMap[block.id] = block;
                     nextBlockMap[block.id].context = new ForContext(value, collection, index, collection.length);
                     nextBlockMap[block.id].context[alias] = value;
-
+console.log(viewTree)
                     nextBlockMap[block.id].view = bootstrap(view.appId, clone, view.parent, nextBlockMap[block.id].context);
 
                     if (fragment.children.length) {
@@ -1373,7 +1410,7 @@
 
     /**
      *
-     * Default Filters
+     * Register Default Filters
      *  - slice
      *  - json
      * 	- lowercase
